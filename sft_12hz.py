@@ -87,6 +87,13 @@ def train():
                 input_codec_ids = input_ids[:, :, 1]
 
                 input_text_embedding = model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
+                
+                # Handle 0.6B model architecture where text_embedding dim != codec_embedding dim
+                # The 0.6B model has text_embedding (2048) and codec_embedding (1024)
+                # Need to project text_embedding to match codec_embedding dimension
+                if hasattr(model.talker, 'text_projection'):
+                    input_text_embedding = model.talker.text_projection(input_text_embedding)
+                
                 input_codec_embedding = model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
                 input_codec_embedding[:, 6, :] = speaker_embedding
 
@@ -125,9 +132,18 @@ def train():
 
         if accelerator.is_main_process:
             output_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
-            shutil.copytree(MODEL_PATH, output_dir, dirs_exist_ok=True)
+            
+            # Get the actual local cache path for HF hub models
+            from huggingface_hub import snapshot_download
+            try:
+                local_model_path = snapshot_download(MODEL_PATH, local_files_only=True)
+            except:
+                # If not cached, download it
+                local_model_path = snapshot_download(MODEL_PATH)
+            
+            shutil.copytree(local_model_path, output_dir, dirs_exist_ok=True)
 
-            input_config_file = os.path.join(MODEL_PATH, "config.json")
+            input_config_file = os.path.join(local_model_path, "config.json")
             output_config_file = os.path.join(output_dir, "config.json")
             with open(input_config_file, 'r', encoding='utf-8') as f:
                 config_dict = json.load(f)
