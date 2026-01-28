@@ -112,22 +112,56 @@ python serve_comparison.py
 - **CustomVoice**: Pre-trained with speaker embedding
 - **VoiceDesign**: Supports voice description prompts
 
-## 📈 Training Tips
 
-1. **Learning Rate**: Start with `5e-6` for stable training. Lower LR = slower but more stable convergence.
-2. **Epochs**: More epochs generally improve voice matching. 15-20 epochs is a good starting point.
-3. **Data Quality**: Clean, consistent audio with good recording quality produces better results.
-4. **Reference Audio**: Use a single consistent reference audio file for all training samples.
+## 🔄 Resuming Training
 
-## 🎧 Web Demo Features
+To resume training:
 
-The comparison demo (`serve_comparison.py`) provides:
+### 1. From a Base Checkpoint
+Use the standard command:
+```bash
+python sft_12hz.py --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base ...
+```
 
-- Side-by-side audio players for all 20 checkpoints
-- Training loss displayed for each epoch
-- Color-coded epochs (early/mid/late training)
-- "Play All" button to hear progression
-- Duration bars showing audio length
+### 2. From a CustomVoice Checkpoint (IMPORTANT)
+If you are resuming from a checkpoint you exported with `--export_mode custom_voice`, you must provide the same speaker index and ensure the script treats it correctly (the `speaker_encoder` is removed in these checkpoints).
+
+```bash
+python sft_12hz.py \
+  --init_model_path ./output_model/checkpoint-epoch-X \
+  --output_model_path ./output_model \
+  --export_mode custom_voice \
+  --speaker_name my_voice \
+  --speaker_index 3000 \
+  ...
+```
+
+The script includes a fallback mechanism to load the speaker embedding from the codec weights if the `speaker_encoder` is missing.
+
+## 🎧 Auto-Generate Samples
+
+This repository includes tools to automatically generate and host samples as training progresses.
+
+### Generate Spanish Samples
+Generate 5 test phrases from the latest checkpoint:
+
+```bash
+python generate_spanish_samples.py --latest
+```
+
+Or target a specific checkpoint:
+```bash
+python generate_spanish_samples.py --checkpoint ./output/checkpoint-epoch-5
+```
+
+### Continuous Monitoring
+Run the watcher script to monitor your output directory. It will detect new checkpoints and generate samples automatically:
+
+```bash
+python watch_and_generate.py
+```
+
+Results are saved to `spanish_samples/` with an `index.html` gallery for easy listening.
 
 ## 📝 License
 

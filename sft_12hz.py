@@ -26,7 +26,9 @@ except Exception:  # pragma: no cover - fallback for older layouts
 def resolve_model_dir(model_id_or_path: str) -> str:
     if os.path.isdir(model_id_or_path):
         return os.path.abspath(model_id_or_path)
-    return os.path.abspath(snapshot_download(repo_id=model_id_or_path, repo_type="model"))
+    return os.path.abspath(
+        snapshot_download(repo_id=model_id_or_path, repo_type="model")
+    )
 
 
 def load_jsonl(path: str):
@@ -42,9 +44,15 @@ def load_jsonl(path: str):
 def get_last_hidden(outputs):
     hs = getattr(outputs, "hidden_states", None)
     if hs is None:
-        raise RuntimeError("Model did not return hidden_states. Ensure output_hidden_states=True.")
+        raise RuntimeError(
+            "Model did not return hidden_states. Ensure output_hidden_states=True."
+        )
     # Some wrappers return nested lists; handle both cases.
-    if isinstance(hs, (list, tuple)) and len(hs) > 0 and isinstance(hs[0], (list, tuple)):
+    if (
+        isinstance(hs, (list, tuple))
+        and len(hs) > 0
+        and isinstance(hs[0], (list, tuple))
+    ):
         return hs[0][-1]
     if isinstance(hs, (list, tuple)):
         return hs[-1]
@@ -53,7 +61,9 @@ def get_last_hidden(outputs):
 
 def train():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--init_model_path", type=str, default="Qwen/Qwen3-TTS-12Hz-1.7B-Base")
+    ap.add_argument(
+        "--init_model_path", type=str, default="Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    )
     ap.add_argument("--output_model_path", type=str, default="output")
     ap.add_argument("--train_jsonl", type=str, required=True)
     ap.add_argument("--batch_size", type=int, default=2)
@@ -61,13 +71,22 @@ def train():
     ap.add_argument("--num_epochs", type=int, default=3)
     ap.add_argument("--grad_accum", type=int, default=4)
     ap.add_argument("--speaker_name", type=str, required=True)
-    ap.add_argument("--log_with", type=str, default="", help="Optional tracker name (e.g., tensorboard)")
+    ap.add_argument(
+        "--log_with",
+        type=str,
+        default="",
+        help="Optional tracker name (e.g., tensorboard)",
+    )
 
     # export mode:
     #   - custom_voice: bakes a fixed speaker id (generate_custom_voice)
     #   - base: keeps speaker_encoder and base-style config (generate_voice_clone)
-    ap.add_argument("--export_mode", type=str, choices=["custom_voice", "base"], default="base")
-    ap.add_argument("--speaker_index", type=int, default=3000)  # only used for custom_voice export
+    ap.add_argument(
+        "--export_mode", type=str, choices=["custom_voice", "base"], default="base"
+    )
+    ap.add_argument(
+        "--speaker_index", type=int, default=3000
+    )  # only used for custom_voice export
     ap.add_argument("--attn_impl", type=str, default="sdpa")
     args = ap.parse_args()
 
@@ -89,7 +108,9 @@ def train():
 
     train_rows = load_jsonl(args.train_jsonl)
     dataset = TTSDataset(train_rows, tts.processor, config)
-    dl = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn)
+    dl = DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=True, collate_fn=dataset.collate_fn
+    )
 
     optimizer = AdamW(tts.model.parameters(), lr=args.lr, weight_decay=0.01)
 
@@ -116,7 +137,24 @@ def train():
                 dev = p.device
                 dt = p.dtype
 
-                speaker_embedding = model.speaker_encoder(ref_mels.to(dev).to(dt)).detach()
+                if (
+                    hasattr(model, "speaker_encoder")
+                    and model.speaker_encoder is not None
+                ):
+                    speaker_embedding = model.speaker_encoder(
+                        ref_mels.to(dev).to(dt)
+                    ).detach()
+                else:
+                    # Resume from custom_voice: pull the baked speaker embedding
+                    idx = int(args.speaker_index)
+                    speaker_embedding = (
+                        model.talker.model.codec_embedding.weight[idx].to(dev).to(dt)
+                    )
+                    speaker_embedding = (
+                        speaker_embedding.unsqueeze(0)
+                        .expand(ref_mels.shape[0], -1)
+                        .detach()
+                    )
 
                 # Update running mean for custom_voice export
                 emb = speaker_embedding.float().mean(dim=0, keepdim=True).cpu()
@@ -130,20 +168,30 @@ def train():
                 input_text_ids = input_ids[:, :, 0]
                 input_codec_ids = input_ids[:, :, 1]
 
-                text_emb = model.talker.model.text_embedding(input_text_ids) * text_embedding_mask
-                codec_emb = model.talker.model.codec_embedding(input_codec_ids) * codec_embedding_mask
+                text_emb = (
+                    model.talker.model.text_embedding(input_text_ids)
+                    * text_embedding_mask
+                )
+                codec_emb = (
+                    model.talker.model.codec_embedding(input_codec_ids)
+                    * codec_embedding_mask
+                )
 
                 # Only project if dims mismatch (0.6B). Never blindly apply.
                 if text_emb.shape[-1] != codec_emb.shape[-1]:
                     if not hasattr(model.talker, "text_projection"):
-                        raise RuntimeError("Dim mismatch but model has no text_projection.")
+                        raise RuntimeError(
+                            "Dim mismatch but model has no text_projection."
+                        )
                     text_emb = model.talker.text_projection(text_emb)
 
                 codec_emb[:, 6, :] = speaker_embedding
                 inputs_embeds = text_emb + codec_emb
 
                 for i in range(1, 16):
-                    emb_i = model.talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, :, i])
+                    emb_i = model.talker.code_predictor.get_input_embeddings()[i - 1](
+                        codec_ids[:, :, i]
+                    )
                     emb_i = emb_i * codec_mask.unsqueeze(-1)
                     inputs_embeds = inputs_embeds + emb_i
 
@@ -174,7 +222,9 @@ def train():
                 optimizer.zero_grad()
 
             if step % 10 == 0:
-                accelerator.print(f"Epoch {epoch} | Step {step} | Loss: {loss.item():.4f}")
+                accelerator.print(
+                    f"Epoch {epoch} | Step {step} | Loss: {loss.item():.4f}"
+                )
 
         if accelerator.is_main_process:
             out_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
@@ -218,7 +268,9 @@ def train():
                 w = state["talker.model.codec_embedding.weight"]
                 idx = int(args.speaker_index)
                 if idx < 0 or idx >= w.shape[0]:
-                    raise RuntimeError(f"speaker_index {idx} out of range (vocab={w.shape[0]})")
+                    raise RuntimeError(
+                        f"speaker_index {idx} out of range (vocab={w.shape[0]})"
+                    )
                 if spk_mean is None:
                     raise RuntimeError("spk_mean is None; no batches seen?")
                 w[idx] = spk_mean[0].to(w.dtype)
