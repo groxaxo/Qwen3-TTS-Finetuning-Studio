@@ -6,3 +6,7 @@ soundfile
 tqdm
 torch
 numpy
+huggingface_hub
+accelerate
+safetensors
+transformers
