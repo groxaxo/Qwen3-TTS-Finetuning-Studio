@@ -85,7 +85,48 @@ python prepare_data.py \
 
 ## 3. Run Fine-Tuning (SFT)
 
-Now start the training loop.
+### Option A: Using the Fixed Training Script (Recommended)
+
+We provide `sft_12hz_fixed_export.py` which fixes critical bugs and supports both export modes:
+
+**For CustomVoice Export (simplest inference):**
+```bash
+python sft_12hz_fixed_export.py \
+  --init_model_path Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+  --output_model_path ./output_model \
+  --train_jsonl ../my_finetune_data/train_with_codes.jsonl \
+  --batch_size 2 \
+  --lr 2e-5 \
+  --num_epochs 10 \
+  --speaker_name my_custom_voice \
+  --export_mode custom_voice \
+  --speaker_index 3000 \
+  --attn_impl sdpa
+```
+
+**For Base-Style Export (keeps voice cloning capability):**
+```bash
+python sft_12hz_fixed_export.py \
+  --init_model_path Qwen/Qwen3-TTS-12Hz-0.6B-Base \
+  --output_model_path ./output_model \
+  --train_jsonl ../my_finetune_data/train_with_codes.jsonl \
+  --batch_size 2 \
+  --lr 2e-5 \
+  --num_epochs 10 \
+  --speaker_name my_custom_voice \
+  --export_mode base \
+  --attn_impl sdpa
+```
+
+**Key Parameters:**
+-   `--export_mode`: Choose `custom_voice` (bakes speaker embedding, simpler inference) or `base` (keeps speaker encoder for voice cloning)
+-   `--batch_size`: Adjust based on your GPU VRAM
+-   `--num_epochs`: 10-20 epochs is usually good for small datasets (~100 samples)
+-   `--grad_accum`: Gradient accumulation steps (default: 4)
+-   `--attn_impl`: Attention implementation (`sdpa` is safer than `flash_attention_2`)
+-   `--speaker_index`: Index for baking speaker embedding (only for custom_voice mode, default: 3000)
+
+### Option B: Using the Original Script
 
 ```bash
 python sft_12hz.py \
@@ -98,13 +139,11 @@ python sft_12hz.py \
   --speaker_name my_custom_voice
 ```
 
-**Parameters:**
--   `--batch_size`: Adjust based on your GPU VRAM.
--   `--num_epochs`: 10-20 epochs is usually good for small datasets (~100 samples).
+> **Note:** The original script has known bugs (see `sft_12hz_fixed_export.py` for fixes). Use the fixed version for better results.
 
 ## 4. Inference / Verification
 
-Once training is done, you can test your new model.
+### CustomVoice Mode (if using --export_mode custom_voice)
 
 ```python
 import torch
@@ -112,19 +151,50 @@ import soundfile as sf
 from qwen_tts import Qwen3TTSModel
 
 # Load your fine-tuned checkpoint (e.g., epoch 9)
-checkpoint_path = "./finetuning/output_model/checkpoint-epoch-9"
+checkpoint_path = "./output_model/checkpoint-epoch-9"
 
 model = Qwen3TTSModel.from_pretrained(
     checkpoint_path,
     device_map="cuda:0",
     dtype=torch.bfloat16,
-    attn_implementation="flash_attention_2",
+    attn_implementation="sdpa",
 )
+
+# Get the speaker name
+speaker = model.get_supported_speakers()[0]
 
 # Generate speech
 wavs, sr = model.generate_custom_voice(
     text="This is my new cloned voice speaking.",
-    speaker="my_custom_voice",  # Must match the name used in training
+    language="Auto",
+    speaker=speaker,  # Use the speaker from training
+)
+
+sf.write("output_test.wav", wavs[0], sr)
+```
+
+### Base Mode (if using --export_mode base)
+
+```python
+import torch
+import soundfile as sf
+from qwen_tts import Qwen3TTSModel
+
+# Load your fine-tuned checkpoint
+checkpoint_path = "./output_model/checkpoint-epoch-9"
+
+model = Qwen3TTSModel.from_pretrained(
+    checkpoint_path,
+    device_map="cuda:0",
+    dtype=torch.bfloat16,
+    attn_implementation="sdpa",
+)
+
+# Generate speech using voice cloning
+wavs, sr = model.generate_voice_clone(
+    text="This is my new cloned voice speaking.",
+    language="Auto",
+    ref_audio="../my_finetune_data/ref_audio.wav",
 )
 
 sf.write("output_test.wav", wavs[0], sr)
