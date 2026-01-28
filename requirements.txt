@@ -1,0 +1,8 @@
+
+qwen-tts
+gradio
+librosa
+soundfile
+tqdm
+torch
+numpy
