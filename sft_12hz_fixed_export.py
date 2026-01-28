@@ -1,4 +1,18 @@
 # coding=utf-8
+# Copyright 2026 The Alibaba Qwen team.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 import argparse
 import json
 import os
@@ -17,11 +31,20 @@ from dataset import TTSDataset
 # Prefer official import surface
 try:
     from qwen_tts import Qwen3TTSModel
-except Exception:
+except ImportError:
     from qwen_tts.inference.qwen3_tts_model import Qwen3TTSModel
 
 
 def resolve_model_dir(model_id_or_path: str) -> str:
+    """
+    Resolve model directory from path or HuggingFace model ID.
+    
+    Args:
+        model_id_or_path: Local directory path or HuggingFace model ID
+        
+    Returns:
+        Absolute path to the model directory
+    """
     if os.path.isdir(model_id_or_path):
         return os.path.abspath(model_id_or_path)
     # download (or reuse cache)
@@ -29,6 +52,15 @@ def resolve_model_dir(model_id_or_path: str) -> str:
 
 
 def load_jsonl(path: str):
+    """
+    Load data from JSONL file.
+    
+    Args:
+        path: Path to the JSONL file
+        
+    Returns:
+        List of dictionaries, one per line
+    """
     rows = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -39,6 +71,20 @@ def load_jsonl(path: str):
 
 
 def get_last_hidden(outputs):
+    """
+    Extract the last hidden state from model outputs.
+    
+    Handles different nesting structures in Qwen3-TTS model outputs.
+    
+    Args:
+        outputs: Model output object with hidden_states attribute
+        
+    Returns:
+        Last hidden state tensor
+        
+    Raises:
+        RuntimeError: If hidden_states is not present in outputs
+    """
     hs = getattr(outputs, "hidden_states", None)
     if hs is None:
         raise RuntimeError("Model did not return hidden_states. Ensure output_hidden_states=True.")
@@ -51,6 +97,18 @@ def get_last_hidden(outputs):
 
 
 def train():
+    """
+    Main training function for Qwen3-TTS fine-tuning.
+    
+    This script fixes three critical bugs from the original sft_12hz.py:
+    1. Text projection only applied when dimensions mismatch (fixes 1.7B gibberish)
+    2. Sub-talker alignment properly shifts both mask and targets
+    3. Speaker embedding uses running mean across all batches (not just first)
+    
+    Supports two export modes:
+    - custom_voice: Bakes speaker embedding into model (simple inference)
+    - base: Keeps speaker encoder for flexible voice cloning
+    """
     ap = argparse.ArgumentParser()
     ap.add_argument("--init_model_path", type=str, default="Qwen/Qwen3-TTS-12Hz-1.7B-Base")
     ap.add_argument("--output_model_path", type=str, default="output")
@@ -142,13 +200,15 @@ def train():
                         raise RuntimeError("Dim mismatch but model has no text_projection.")
                     text_emb = model.talker.text_projection(text_emb)
 
-                # Inject speaker embedding at slot 6
-                codec_emb[:, 6, :] = speaker_embedding
+                # Inject speaker embedding at slot 6 (special position for speaker info)
+                SPEAKER_EMBEDDING_SLOT = 6
+                codec_emb[:, SPEAKER_EMBEDDING_SLOT, :] = speaker_embedding
 
                 inputs_embeds = text_emb + codec_emb
 
-                # Add codebook 1..15 embeddings
-                for i in range(1, 16):
+                # Add codebook 1..15 embeddings (codebook 0 is handled separately via labels)
+                NUM_SUB_CODEBOOKS = 16
+                for i in range(1, NUM_SUB_CODEBOOKS):
                     emb_i = model.talker.code_predictor.get_input_embeddings()[i - 1](codec_ids[:, :, i])
                     emb_i = emb_i * codec_mask.unsqueeze(-1)
                     inputs_embeds = inputs_embeds + emb_i
@@ -179,7 +239,9 @@ def train():
                 optimizer.step()
                 optimizer.zero_grad()
 
-            if step % 10 == 0:
+            # Log progress every N steps
+            LOG_INTERVAL = 10
+            if step % LOG_INTERVAL == 0:
                 accelerator.print(f"Epoch {epoch} | Step {step} | Loss: {loss.item():.4f}")
 
         # ---- Save checkpoint per epoch ----
