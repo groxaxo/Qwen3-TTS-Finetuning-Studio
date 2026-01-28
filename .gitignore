@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Logs
+*.log
+
+# Test outputs
+test_output/
+test_*.wav
+
+# Large model files (download separately)
+Qwen3-TTS/
+Qwen3-TTS-12Hz-*/
+Qwen3-TTS-Tokenizer-*/
+
+# Training outputs (too large for git)
+output_model_*/
+finetune_data_*/
+
+# Generated samples (can be regenerated)
+comparison_samples/
+demo_samples/
+*_samples/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
