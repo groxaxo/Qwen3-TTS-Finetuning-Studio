@@ -96,6 +96,41 @@ def get_last_hidden(outputs):
     return hs
 
 
+def copy_model_artifacts(src_dir: str, dst_dir: str):
+    """
+    Copy only essential model artifacts (configs, tokenizer) without weights.
+    
+    This avoids copying the entire base model directory which can be slow
+    for large HuggingFace snapshots with multiple weight shards.
+    
+    Args:
+        src_dir: Source model directory
+        dst_dir: Destination directory
+    """
+    os.makedirs(dst_dir, exist_ok=True)
+    
+    # Essential files to copy (configs, tokenizer, etc.)
+    # Note: We don't copy weight files as we save our own model.safetensors
+    essential_patterns = [
+        "config.json",
+        "generation_config.json",
+        "tokenizer_config.json",
+        "tokenizer.json",
+        "special_tokens_map.json",
+        "vocab.json",
+        "merges.txt",
+        "added_tokens.json",
+        "processor_config.json",
+        "preprocessor_config.json",
+    ]
+    
+    for pattern in essential_patterns:
+        src_file = os.path.join(src_dir, pattern)
+        if os.path.isfile(src_file):
+            dst_file = os.path.join(dst_dir, pattern)
+            shutil.copy2(src_file, dst_file)
+
+
 def train():
     """
     Main training function for Qwen3-TTS fine-tuning.
@@ -176,14 +211,16 @@ def train():
                 # Speaker embedding from ref audio
                 speaker_embedding = model.speaker_encoder(ref_mels.to(dev).to(dt)).detach()  # [B,H]
 
-                # Update running mean (for custom_voice export)
-                emb = speaker_embedding.float().mean(dim=0, keepdim=True).cpu()
-                if spk_mean is None:
-                    spk_mean = emb.clone()
-                    spk_n = 1
-                else:
-                    spk_n += 1
-                    spk_mean += (emb - spk_mean) / spk_n
+                # Update running mean (for custom_voice export only)
+                if args.export_mode == "custom_voice":
+                    emb = speaker_embedding.float().mean(dim=0, keepdim=True).cpu()
+                    batch_n = speaker_embedding.shape[0]
+                    if spk_mean is None:
+                        spk_mean = emb.clone()
+                        spk_n = batch_n
+                    else:
+                        spk_n += batch_n
+                        spk_mean += (emb - spk_mean) * (batch_n / spk_n)
 
                 input_text_ids = input_ids[:, :, 0]
                 input_codec_ids = input_ids[:, :, 1]
@@ -249,8 +286,8 @@ def train():
             out_dir = os.path.join(args.output_model_path, f"checkpoint-epoch-{epoch}")
             os.makedirs(out_dir, exist_ok=True)
 
-            # Copy base artifacts (tokenizer, configs, etc.)
-            shutil.copytree(base_dir, out_dir, dirs_exist_ok=True)
+            # Copy only essential artifacts (configs, tokenizer) - not the full base directory
+            copy_model_artifacts(base_dir, out_dir)
 
             # Patch config depending on export mode
             cfg_path = os.path.join(out_dir, "config.json")
